@@ -52,167 +52,166 @@ const hasKey = (obj: any, key: string) => Object.keys(obj).includes(key);
 export async function Run(command: string, runArgs: string[] = []) {
     let prefix = (await exists('./run.json')) ? 'json' : 'yaml';
 
-    if (!(await exists('./run.json')) && !(await exists('./run.yaml')) && !(await exists('./run.yml'))) {
-        throw new Error(red(`: ${yellow('run.json or run.yaml not found')}`)).message;
+    // if (!(await exists('./run.json')) && !(await exists('./run.yaml')) && !(await exists('./run.yml'))) {
+    //     throw new Error(red(`: ${yellow('run.json or run.yaml not found')}`)).message;
+    // }
+
+    // if ((await exists('./run.json')) && ((await exists('./run.yaml')) || (await exists('./run.yml')))) {
+    //     throw new Error(red(`: ${yellow('use a single format run.json or run.yaml file')}`)).message;
+    // } else {
+    async function Thread() {
+        try {
+            const runJsonScripts = await getRunJsonScripts();
+            const denoTasks = await getDenoTasks();
+            const allScripts: Record<string, any> = {};
+
+            // @ts-ignore
+            Object.keys(runJsonScripts).forEach(key => (allScripts[key] = runJsonScripts[key]));
+            Object.keys(denoTasks).forEach(key => (allScripts[key] = denoTasks[key]));
+
+            if (hasKey(denoTasks, command)) {
+                console.log('running deno task');
+                executeCommand('deno', [denoTasks[command], runArgs].join(' '));
+                return true;
+            }
+
+            if (Object.keys(runJsonScripts).length === 0 && Object.keys(denoTasks).length === 0) {
+                throw new Error(red(`: ${yellow(`the 'scripts' key not found in run.${prefix} file`)}`)).message;
+            }
+
+            const scripts = Object.keys(runJsonScripts);
+
+            const toRun = scripts.map(key => (key === command ? runJsonScripts[key] : undefined)).filter(el => !!el) as string[];
+
+            if (!toRun.length) {
+                throw new Error(red(`: ${yellow('command not found')}`)).message;
+            }
+            // normalize command
+            const runnerCommand = toRun[0].split(' ').filter(arg => !!arg);
+
+            // github action fallback deno dir path
+            const ghFallBack = Match(Deno.build.os)
+                .case('darwin', () => '/Users/runner/.deno/bin')
+                .case('linux', () => '/home/runner/.deno/bin')
+                .case('windows', () => 'C:\\Users\\runneradmin\\.deno\\bin')
+                .default()
+                .Value() as string;
+
+            // get path to deno scripts
+            const scriptPath = isGH
+                ? ghFallBack
+                : Deno.build.os === 'windows'
+                ? // to windows base
+                  join('C:', 'Users', env.get('USERNAME')!, '.deno', 'bin', runnerCommand[0])
+                : // to unix base
+                  join(env.get('HOME')!, '.deno', 'bin', runnerCommand[0]);
+
+            // prevent deno scrips not found error
+            if ((await exists(scriptPath)) || (await exists(`${scriptPath}.cmd`))) {
+                if (Deno.build.os === 'linux' || Deno.build.os === 'darwin') {
+                    runnerCommand[0] = scriptPath;
+                } else if (Deno.build.os === 'windows') {
+                    runnerCommand[0] = `${runnerCommand[0]}.cmd`;
+                }
+            }
+
+            const [currentCMD, execCommand] = [
+                ['trex', 'run', command].join(' '),
+                [...runnerCommand]
+                    .map(cmd => cmd?.trim())
+                    .join(' ')
+                    .replaceAll('.cmd', ''),
+            ];
+
+            const last = execCommand.split('/');
+
+            // remove path to compare on unix base os
+            const toCompare = Deno.build.os === 'linux' || Deno.build.os === 'darwin' ? last[last.length - 1] : execCommand;
+
+            // prevent circular call
+            if (currentCMD === toCompare) {
+                throw new EvalError(`${yellow('Circular call found in: ')}${red(toRun[0])}`).message;
+            }
+
+            const process = run({
+                cmd: [...runnerCommand, ...runArgs].map((command, index) =>
+                    command === 'deno' && (index === 0 || index === 1) ? ResolveDenoPath() : command,
+                ),
+                stderr: 'piped',
+                stdout: 'inherit',
+                env: env.toObject(),
+                cwd: Deno.cwd(),
+            });
+            const [status] = await Promise.all([process.status()]);
+
+            if (!(await process.status()).success) {
+                Deno.close(process.rid);
+                throw new Error(`Error: running command ${red(toRun[0])}`).message;
+            }
+
+            Deno.close(process.rid);
+        } catch (err) {
+            throw new Error(
+                err instanceof SyntaxError
+                    ? red(`the ${yellow(`'run.${prefix}'`)} file not have a valid syntax`)
+                    : err instanceof Deno.errors.NotFound
+                    ? red(err.message)
+                    : yellow(err.message ?? `${err}`),
+            ).message;
+        }
     }
 
-    if ((await exists('./run.json')) && ((await exists('./run.yaml')) || (await exists('./run.yml')))) {
-        throw new Error(red(`: ${yellow('use a single format run.json or run.yaml file')}`)).message;
-    } else {
-        async function Thread() {
-            try {
-                const runJsonScripts = await getRunJsonScripts();
-                const denoTasks = await getDenoTasks();
-                const allScripts: Record<string, any> = {};
-                
-                // @ts-ignore
-                Object.keys(runJsonScripts).forEach((key => (allScripts[key] = runJsonScripts[key])));
-                Object.keys(denoTasks).forEach(key => (allScripts[key] = denoTasks[key]));
+    const filesToWatch = prefix === 'json' ? ((await readJson('./run.json')) as runJson) : await parseToYaml();
 
-                if (hasKey(denoTasks, command)) {
-                    console.log('running deno task');
-                    executeCommand('deno', [denoTasks[command], runArgs].join(' '));
-                    return true;
-                }
+    const watchFlags = Deno.args[2] === '--watch' || Deno.args[2] === '-w' || Deno.args[2] === '-wv';
 
-                if (Object.keys(runJsonScripts).length === 0 && Object.keys(denoTasks).length === 0) {
-                    throw new Error(red(`: ${yellow(`the 'scripts' key not found in run.${prefix} file`)}`)).message;
-                }
+    // run using trp (trex reboot protocol)
+    if (filesToWatch?.files && watchFlags) {
+        const files = filesToWatch.files.length ? [...filesToWatch.files] : ['.'];
 
-                const scripts = Object.keys(runJsonScripts);
+        let throttle = 700;
+        let timeout: number | null = null;
 
-                const toRun = scripts.map(key => (key === command ? runJsonScripts[key] : undefined)).filter(el => !!el) as string[];
-
-                if (!toRun.length) {
-                    throw new Error(red(`: ${yellow('command not found')}`)).message;
-                }
-                // normalize command
-                const runnerCommand = toRun[0].split(' ').filter(arg => !!arg);
-
-                // github action fallback deno dir path
-                const ghFallBack = Match(Deno.build.os)
-                    .case('darwin', () => '/Users/runner/.deno/bin')
-                    .case('linux', () => '/home/runner/.deno/bin')
-                    .case('windows', () => 'C:\\Users\\runneradmin\\.deno\\bin')
-                    .default()
-                    .Value() as string;
-
-                // get path to deno scripts
-                const scriptPath = isGH
-                    ? ghFallBack
-                    : Deno.build.os === 'windows'
-                    ? // to windows base
-                      join('C:', 'Users', env.get('USERNAME')!, '.deno', 'bin', runnerCommand[0])
-                    : // to unix base
-                      join(env.get('HOME')!, '.deno', 'bin', runnerCommand[0]);
-
-                // prevent deno scrips not found error
-                if ((await exists(scriptPath)) || (await exists(`${scriptPath}.cmd`))) {
-                    if (Deno.build.os === 'linux' || Deno.build.os === 'darwin') {
-                        runnerCommand[0] = scriptPath;
-                    } else if (Deno.build.os === 'windows') {
-                        runnerCommand[0] = `${runnerCommand[0]}.cmd`;
-                    }
-                }
-
-                const [currentCMD, execCommand] = [
-                    ['trex', 'run', command].join(' '),
-                    [...runnerCommand]
-                        .map(cmd => cmd?.trim())
-                        .join(' ')
-                        .replaceAll('.cmd', ''),
-                ];
-
-                const last = execCommand.split('/');
-
-                // remove path to compare on unix base os
-                const toCompare = Deno.build.os === 'linux' || Deno.build.os === 'darwin' ? last[last.length - 1] : execCommand;
-
-                // prevent circular call
-                if (currentCMD === toCompare) {
-                    throw new EvalError(`${yellow('Circular call found in: ')}${red(toRun[0])}`).message;
-                }
-
-                const process = run({
-                    cmd: [...runnerCommand, ...runArgs].map((command, index) =>
-                        command === 'deno' && (index === 0 || index === 1) ? ResolveDenoPath() : command,
-                    ),
-                    stderr: 'piped',
-                    stdout: 'inherit',
-                    env: env.toObject(),
-                    cwd: Deno.cwd(),
-                });
-                const [status] = await Promise.all([process.status()]);
-
-                if (!(await process.status()).success) {
-                    Deno.close(process.rid);
-                    throw new Error(`Error: running command ${red(toRun[0])}`).message;
-                }
-
-                Deno.close(process.rid);
-            } catch (err) {
-                throw new Error(
-                    err instanceof SyntaxError
-                        ? red(`the ${yellow(`'run.${prefix}'`)} file not have a valid syntax`)
-                        : err instanceof Deno.errors.NotFound
-                        ? red(err.message)
-                        : yellow(err.message ?? `${err}`),
-                ).message;
-            }
-        }
-
-        const filesToWatch = prefix === 'json' ? ((await readJson('./run.json')) as runJson) : await parseToYaml();
-
-        const watchFlags = Deno.args[2] === '--watch' || Deno.args[2] === '-w' || Deno.args[2] === '-wv';
-
-        // run using trp (trex reboot protocol)
-        if (filesToWatch?.files && watchFlags) {
-            const files = filesToWatch.files.length ? [...filesToWatch.files] : ['.'];
-
-            let throttle = 700;
-            let timeout: number | null = null;
-
-            function logMessages(verbose?: Deno.FsEvent) {
-                console.clear();
-                console.log(green('[Reboot protocol]'));
-                console.log(green('[*] watching files:'));
-                console.info(
-                    red(
-                        `[#] exit using ctrl+c \n ${
-                            filesToWatch?.files?.length
-                                ? filesToWatch.files
-                                      .map((file: string) => {
-                                          console.log(' |- ', yellow(join(file)));
-                                          return '';
-                                      })
-                                      .join('')
-                                : (console.log(` |- ${yellow('all files [ .* ]')}`) as undefined) ?? ''
-                        } `,
-                    ),
+        function logMessages(verbose?: Deno.FsEvent) {
+            console.clear();
+            console.log(green('[Reboot protocol]'));
+            console.log(green('[*] watching files:'));
+            console.info(
+                red(
+                    `[#] exit using ctrl+c \n ${
+                        filesToWatch?.files?.length
+                            ? filesToWatch.files
+                                  .map((file: string) => {
+                                      console.log(' |- ', yellow(join(file)));
+                                      return '';
+                                  })
+                                  .join('')
+                            : (console.log(` |- ${yellow('all files [ .* ]')}`) as undefined) ?? ''
+                    } `,
+                ),
+            );
+            if (Deno.args[2] === '-wv' && verbose) {
+                console.log(
+                    green(` ╭─ Verbose output ${yellow('-wv')}:\n`),
+                    green(`│- Event Kind: ${yellow(verbose?.kind)}\n`),
+                    green(`╰─ Path: ${yellow(verbose?.paths.join(''))}\n`),
                 );
-                if (Deno.args[2] === '-wv' && verbose) {
-                    console.log(
-                        green(` ╭─ Verbose output ${yellow('-wv')}:\n`),
-                        green(`│- Event Kind: ${yellow(verbose?.kind)}\n`),
-                        green(`╰─ Path: ${yellow(verbose?.paths.join(''))}\n`),
-                    );
-                }
             }
-
-            logMessages();
-            await Thread();
-            for await (const event of Deno.watchFs(files, { recursive: true })) {
-                if (event.kind !== 'access') {
-                    if (timeout) clearTimeout(timeout);
-                    console.log(yellow('reloading...'));
-                    logMessages(event);
-                    timeout = setTimeout(Thread, throttle);
-                }
-            }
-        } // run a single exec thread
-        else {
-            await Thread();
         }
+
+        logMessages();
+        await Thread();
+        for await (const event of Deno.watchFs(files, { recursive: true })) {
+            if (event.kind !== 'access') {
+                if (timeout) clearTimeout(timeout);
+                console.log(yellow('reloading...'));
+                logMessages(event);
+                timeout = setTimeout(Thread, throttle);
+            }
+        }
+    } // run a single exec thread
+    else {
+        await Thread();
     }
 }
 
