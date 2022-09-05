@@ -22,7 +22,7 @@
   * @param {string} runner
   * @param {string} cmd
   */
- function executeCommand(runner: string, cmd: string) {
+ async function executeCommand(runner: string, cmd: string) {
      const process = run({
          cmd: [runner, 'run', ...cmd.split(' ')].map((command, index) =>
              command === 'deno' && (index === 0 || index === 1) ? ResolveDenoPath() : command,
