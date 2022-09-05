@@ -75,9 +75,9 @@ export async function Run(command: string, runArgs: string[] = []) {
                 return true;
             }
 
-            if (Object.keys(runJsonScripts).length === 0 && Object.keys(denoTasks).length === 0) {
-                throw new Error(red(`: ${yellow(`the 'scripts' key not found in run.${prefix} file`)}`)).message;
-            }
+            // if (Object.keys(runJsonScripts).length === 0 && Object.keys(denoTasks).length === 0) {
+            //     throw new Error(red(`: ${yellow(`the 'scripts' key not found in run.${prefix} file`)}`)).message;
+            // }
 
             const scripts = Object.keys(runJsonScripts);
 
