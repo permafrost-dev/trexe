@@ -226,7 +226,7 @@ const hasKey = (obj: any, key: string) => Object.keys(obj).includes(key);
      if (await exists('./deno.json')) {
          const denoJson = (await readJson('./deno.json')) as DenoJson;
  
-         return denoJson['scripts'] || {};
+         return denoJson['tasks'] || {};
      }
  
      return {};
