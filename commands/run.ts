@@ -63,7 +63,14 @@ const hasKey = (obj: any, key: string) => Object.keys(obj).includes(key);
              try {
                  const runJsonFile = await Scripts();
                  const denoTasks = await getDenoTasks();
-                 const allScripts = { run: runJsonFile?.scripts || {}, tasks: denoTasks };
+                 const allScripts: Record<string, any> = {};
+                  Object.keys(runJsonFile?.scripts).forEach(key => 
+                      allScripts[key] = runJsonFile?.scripts[key] 
+                  );
+
+                  Object.keys(denoTasks).forEach(key =>
+                      allScripts[key] = denoTasks[key]
+                  );
  
                  if (hasKey(denoTasks, command)) {
                    console.log('running deno task');
@@ -71,11 +78,11 @@ const hasKey = (obj: any, key: string) => Object.keys(obj).includes(key);
                    return true;
                  }
  
-                 if (Object.keys(allScripts.run).length === 0 && !Object.keys(allScripts.tasks).length) {
+                 if (Object.keys(runJsonFile?.run || {}).length === 0 && Object.keys(denoTasks).length === 0) {
                      throw new Error(red(`: ${yellow(`the 'scripts' key not found in run.${prefix} file`)}`)).message;
                  }
  
-                 const scripts = Object.keys(allScripts.run);
+                 const scripts = Object.keys(runJsonFile);
  
                  const toRun = scripts.map(key => (key === command ? allScripts.run[key] : undefined)).filter(el => !!el) as string[];
  
