@@ -1,5 +1,5 @@
 {
     "tasks": {
-        "cache:purge": "rm -rf ~/.cache/deno/deps/https/raw.githubusercontent.com"
+        "cache-purge": "sh -c 'rm -rf ~/.cache/deno/deps/https/raw.githubusercontent.com'"
     }
 }
