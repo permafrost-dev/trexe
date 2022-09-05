@@ -77,7 +77,7 @@ const hasKey = (obj: any, key: string) => Object.keys(obj).includes(key);
  
                  const scripts = Object.keys(allScripts.run);
  
-                 const toRun = allScripts.run.map(key => (key === command ? allScripts.run[key] : undefined)).filter(el => !!el) as string[];
+                 const toRun = scripts.map(key => (key === command ? allScripts.run[key] : undefined)).filter(el => !!el) as string[];
  
                  if (!toRun.length) {
                      throw new Error(red(`: ${yellow('command not found')}`)).message;
